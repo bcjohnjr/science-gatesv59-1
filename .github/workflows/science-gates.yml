@@ -22,8 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -42,13 +42,17 @@ jobs:
           test -f "$FAIR_SOURCE_DIR/examples/data/calibrated_constrained_ensemble/calibrated_constrained_parameters_calibration1.4.1.csv"
           python -m py_compile run_fair_science_experiments.py verify_fair_outputs.py
       - name: Run scientific FaIR experiments
-        run: python run_fair_science_experiments.py
+        run: |
+          set -o pipefail
+          python run_fair_science_experiments.py 2>&1 | tee FAIR_CONSOLE.log
       - name: Verify FaIR scientific outputs
         run: python verify_fair_outputs.py
-      - uses: actions/upload-artifact@v4
+      - name: Upload FaIR outputs and diagnostic log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
         with:
           name: fair-science-gates
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
           path: |
             fair_paired_attribution.csv
@@ -60,12 +64,13 @@ jobs:
             fair_paired_attribution_selected.csv
             fair_science_experiment_summary.json
             FAIR_RUN_REPORT.txt
+            FAIR_CONSOLE.log
       - name: Optionally commit verified FaIR outputs
-        if: ${{ inputs.commit_results }}
+        if: ${{ success() && inputs.commit_results }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fair_* FAIR_RUN_REPORT.txt
+          git add fair_* FAIR_RUN_REPORT.txt FAIR_CONSOLE.log
           if git diff --cached --quiet; then
             echo "No FaIR output changes to commit."
           else
@@ -79,7 +84,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: r-lib/actions/setup-r@v2
         with:
           r-version: "4.5.1"
@@ -88,38 +93,45 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libboost-dev libboost-filesystem-dev libboost-system-dev
-      - name: Install Hector 3.5.0
-        shell: Rscript {0}
+      - name: Install Hector 3.5.0 without GitHub API dependency
         run: |
-          install.packages(c("remotes", "jsonlite"))
-          remotes::install_github("JGCRI/hector@v3.5.0", upgrade="never", dependencies=TRUE)
+          Rscript -e 'install.packages(c("Rcpp", "BH", "jsonlite"), repos="https://cloud.r-project.org")'
+          rm -rf /tmp/hector-v3.5.0
+          git clone --depth 1 --branch v3.5.0 https://github.com/JGCRI/hector.git /tmp/hector-v3.5.0
+          R CMD INSTALL --no-multiarch --with-keep.source /tmp/hector-v3.5.0
+          Rscript -e 'library(hector); stopifnot(as.character(packageVersion("hector")) == "3.5.0"); cat("Hector", as.character(packageVersion("hector")), "installed\n")'
       - name: Verify flat Hector input
         run: test -f external_validation_net_co2_trajectory.csv
       - name: Run Hector paired experiment
-        run: Rscript run_hector_paired.R
-      - uses: actions/setup-python@v5
+        run: |
+          set -o pipefail
+          Rscript run_hector_paired.R 2>&1 | tee HECTOR_CONSOLE.log
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Verify Hector outputs
         run: |
           python -m pip install pandas
           python verify_hector_outputs.py
-      - uses: actions/upload-artifact@v4
+      - name: Upload Hector outputs and diagnostic log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
         with:
           name: hector-science-gates
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
           path: |
             hector_paired_attribution.csv
             hector_removal_on_long.csv
             hector_removal_off_long.csv
             hector_science_summary.json
+            HECTOR_CONSOLE.log
       - name: Optionally commit verified Hector outputs
-        if: ${{ inputs.commit_results }}
+        if: ${{ success() && inputs.commit_results }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add hector_*
+          git add hector_* HECTOR_CONSOLE.log
           if git diff --cached --quiet; then
             echo "No Hector output changes to commit."
           else
