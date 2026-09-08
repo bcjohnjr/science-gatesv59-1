@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# RUN7_FIX_ID: V59.1-2026-09-08-target-bounded-inverse-solve
+# RUN8_FIX_ID: V59.1-2026-09-08-split-paired-and-target-inverse-jobs
 from pathlib import Path
 import os
-import json, math, time
+import json, math, time, argparse
 import numpy as np
 import pandas as pd
 from fair import FAIR
@@ -260,154 +260,176 @@ def attr(a, b, cdr, label):
     )
 
 
-on, off, cdr = paths()
-print('paired standard', flush=True)
-fon = std(on)
-foff = std(off)
-a = attr(fon, foff, cdr, 'medium-extension')
-a.to_csv(OUT / 'fair_paired_attribution.csv', index=False)
-np.savez_compressed(
-    OUT / 'fair_paired_members.npz',
-    years=np.asarray(fon.timebounds, float),
-    config_ids=ids,
-    co2_on=co2(fon),
-    co2_off=co2(foff),
-    temp_on=temp(fon),
-    temp_off=temp(foff),
-)
-
-# Print the key paired results immediately so they survive in the Actions log
-# even if a later inverse-search run is interrupted by runner infrastructure.
-for yy in [2156, 2184, 2200, 2300, 2400]:
-    rr = a.iloc[int(np.argmin(np.abs(a.timebound_year.to_numpy(float) - yy)))]
-    print(
-        'PAIRED_STANDARD', yy,
-        'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
-        'fraction_p05_p50_p95',
-        round(float(rr.fraction_p05), 6),
-        round(float(rr.fraction_p50), 6),
-        round(float(rr.fraction_p95), 6),
-        flush=True,
+def run_paired():
+    on, off, cdr = paths()
+    print('paired standard', flush=True)
+    fon = std(on)
+    foff = std(off)
+    a = attr(fon, foff, cdr, 'medium-extension')
+    a.to_csv(OUT / 'fair_paired_attribution.csv', index=False)
+    np.savez_compressed(
+        OUT / 'fair_paired_members.npz',
+        years=np.asarray(fon.timebounds, float),
+        config_ids=ids,
+        co2_on=co2(fon),
+        co2_off=co2(foff),
+        temp_on=temp(fon),
+        temp_off=temp(foff),
     )
 
-print('paired preindustrial-background future non-CO2', flush=True)
-fzon = neutral(on)
-fzoff = neutral(off)
-i26 = ix(fon, 2026)
-audit = {
-    'co2_maxabs': float(np.max(np.abs(co2(fon)[i26] - co2(fzon)[i26]))),
-    'temp_maxabs': float(np.max(np.abs(temp(fon)[i26] - temp(fzon)[i26]))),
-}
-assert audit['co2_maxabs'] < 1e-6 and audit['temp_maxabs'] < 1e-6, audit
-az = attr(fzon, fzoff, cdr, 'preindustrial-background-future-nonco2')
-az.to_csv(OUT / 'fair_paired_attribution_neutral_nonco2.csv', index=False)
-print('COMMON_STATE_AUDIT', json.dumps(audit, sort_keys=True), flush=True)
-for yy in [2156, 2184, 2200, 2300, 2400]:
-    rr = az.iloc[int(np.argmin(np.abs(az.timebound_year.to_numpy(float) - yy)))]
-    print(
-        'PAIRED_NEUTRAL', yy,
-        'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
-        'fraction_p05_p50_p95',
-        round(float(rr.fraction_p05), 6),
-        round(float(rr.fraction_p50), 6),
-        round(float(rr.fraction_p95), 6),
-        flush=True,
-    )
-
-bg = []
-for y in [2026, 2040, 2100, 2156, 2184, 2200, 2300, 2400]:
-    s = stats(fon, y)
-    z = stats(fzon, y)
-    dz = q(z['c'] - s['c'])
-    bg.append([y, *s['cq'], *z['cq'], *dz, s['tq'][1], z['tq'][1]])
-pd.DataFrame(
-    bg,
-    columns=[
-        'year', 'std_p05', 'std_p50', 'std_p95',
-        'neutral_p05', 'neutral_p50', 'neutral_p95',
-        'difference_p05', 'difference_p50', 'difference_p95',
-        'std_temp_p50', 'neutral_temp_p50'
-    ],
-).to_csv(OUT / 'fair_neutral_nonco2.csv', index=False)
-
-print('inverse solve', flush=True)
-targets = [2200, 2300, 2400]
-# Cache by (target year, rate). Each inverse experiment is intentionally run
-# only through its target year. The previous implementation ran a 2200 test
-# all the way to 2400; high rates that were physically relevant at 2200 then
-# kept removing carbon for another 200 years and drove some ensemble members
-# to non-positive CO2, producing invalid log/sqrt warnings and wasting compute.
-cache = {}
-for _y in targets:
-    cache[(_y, 0.0)] = stats(fon, _y)
-
-
-def ev(r, y):
-    y = int(y)
-    k = (y, round(float(r), 10))
-    if k not in cache:
-        t0 = time.time()
-        p, _, _ = paths(float(r), end=y)
-        f = std(p, end=y)
-        st = stats(f, y)
-        if (
-            np.any(~np.isfinite(st['c']))
-            or np.any(~np.isfinite(st['t']))
-            or np.any(st['c'] <= 0)
-        ):
-            raise RuntimeError(
-                f'Non-physical/non-finite FaIR endpoint for target={y}, rate={r}: '
-                f'CO2 range={np.nanmin(st["c"])}..{np.nanmax(st["c"])}'
-            )
-        cache[k] = st
+    for yy in [2156, 2184, 2200, 2300, 2400]:
+        rr = a.iloc[int(np.argmin(np.abs(a.timebound_year.to_numpy(float) - yy)))]
         print(
-            'INVERSE_EVAL', 'target', y, 'rate', r,
-            'co2_p50', round(float(st['cq'][1]), 6),
-            'baseline_delta_p50', round(float(st['bq'][1]), 6),
-            'sec', round(time.time() - t0, 1),
+            'PAIRED_STANDARD', yy,
+            'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
+            'fraction_p05_p50_p95',
+            round(float(rr.fraction_p05), 6),
+            round(float(rr.fraction_p50), 6),
+            round(float(rr.fraction_p95), 6),
             flush=True,
         )
-    return cache[k]
+
+    print('paired preindustrial-background future non-CO2', flush=True)
+    fzon = neutral(on)
+    fzoff = neutral(off)
+    i26 = ix(fon, 2026)
+    audit = {
+        'co2_maxabs': float(np.max(np.abs(co2(fon)[i26] - co2(fzon)[i26]))),
+        'temp_maxabs': float(np.max(np.abs(temp(fon)[i26] - temp(fzon)[i26]))),
+    }
+    assert audit['co2_maxabs'] < 1e-6 and audit['temp_maxabs'] < 1e-6, audit
+    az = attr(fzon, fzoff, cdr, 'preindustrial-background-future-nonco2')
+    az.to_csv(OUT / 'fair_paired_attribution_neutral_nonco2.csv', index=False)
+    print('COMMON_STATE_AUDIT', json.dumps(audit, sort_keys=True), flush=True)
+    for yy in [2156, 2184, 2200, 2300, 2400]:
+        rr = az.iloc[int(np.argmin(np.abs(az.timebound_year.to_numpy(float) - yy)))]
+        print(
+            'PAIRED_NEUTRAL', yy,
+            'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
+            'fraction_p05_p50_p95',
+            round(float(rr.fraction_p05), 6),
+            round(float(rr.fraction_p50), 6),
+            round(float(rr.fraction_p95), 6),
+            flush=True,
+        )
+
+    bg = []
+    for y in [2026, 2040, 2100, 2156, 2184, 2200, 2300, 2400]:
+        s = stats(fon, y)
+        z = stats(fzon, y)
+        dz = q(z['c'] - s['c'])
+        bg.append([y, *s['cq'], *z['cq'], *dz, s['tq'][1], z['tq'][1]])
+    pd.DataFrame(
+        bg,
+        columns=[
+            'year', 'std_p05', 'std_p50', 'std_p95',
+            'neutral_p05', 'neutral_p50', 'neutral_p95',
+            'difference_p05', 'difference_p50', 'difference_p95',
+            'std_temp_p50', 'neutral_temp_p50'
+        ],
+    ).to_csv(OUT / 'fair_neutral_nonco2.csv', index=False)
+
+    sel = a.iloc[[int(np.argmin(np.abs(a.timebound_year.to_numpy(float) - yy)))
+                  for yy in [2040, 2100, 2156, 2184, 2200, 2300, 2400]]]
+    sel.to_csv(OUT / 'fair_paired_attribution_selected.csv', index=False)
+
+    summary = {
+        'model': 'FaIR 2.2.4',
+        'calibration': 'fair-calibrate 1.4.1',
+        'configs': 841,
+        'canonical_cdr_gtco2': CAN_CDR,
+        'peak_cdr_gtco2_per_year': PEAK,
+        'gtco2_per_ppm': conv,
+        'common_state_audit': audit,
+        'attribution': 'member-wise paired removal-off minus removal-on, then quantiles',
+        'neutral_nonco2_definition': (
+            'All standard inputs are preserved through 2026. From 2027 onward, '
+            'non-CO2 emissions-driven species are set to calibrated baseline_emissions, '
+            'forcing-driven species to zero forcing, concentration-driven species to '
+            'calibrated baseline_concentration, and calculated species remain calculated. '
+            'Official FaIR species input modes are not altered.'
+        ),
+    }
+    (OUT / 'fair_paired_summary.json').write_text(json.dumps(summary, indent=2))
+    with (OUT / 'FAIR_PAIRED_RUN_REPORT.txt').open('w') as h:
+        h.write('FaIR 2.2.4 paired science experiments\n')
+        h.write(json.dumps(summary, indent=2))
+        h.write('\n')
+    print('PAIRED_COMPLETE', flush=True)
 
 
-def metric(r, y, kind):
-    st = ev(r, y)
-    if kind == 'absolute_280':
-        return float(np.median(st['c']) - 280)
-    return float(np.median(st['c'] - base))
+def run_inverse(target):
+    target = int(target)
+    if target not in (2200, 2300, 2400):
+        raise ValueError('target must be 2200, 2300, or 2400')
 
+    print('inverse solve target', target, flush=True)
+    on, _, _ = paths(end=target)
+    # One canonical run provides the zero-extra-CDR endpoint for this target.
+    f0 = std(on, end=target)
+    cache = {0.0: stats(f0, target)}
 
-def solve(y, kind):
-    lo = 0.0
-    flo = metric(lo, y, kind)
-    if flo <= 0:
-        return 0.0, 'already_met', 0.0, 0.0
-    hi = 1.0
-    fhi = metric(hi, y, kind)
-    while fhi > 0 and hi < 512:
-        lo, flo = hi, fhi
-        hi *= 2
-        fhi = metric(hi, y, kind)
-    if fhi > 0:
-        return None, 'not_bracketed', lo, hi
-    # Ten bisections retain high numerical precision while materially reducing
-    # the number of 841-member FaIR evaluations versus the former 14 rounds.
-    for _ in range(10):
-        mid = (lo + hi) / 2
-        fm = metric(mid, y, kind)
-        if fm > 0:
-            lo, flo = mid, fm
-        else:
-            hi, fhi = mid, fm
-    return hi, 'solved', lo, hi
+    def ev(r):
+        k = round(float(r), 10)
+        if k not in cache:
+            t0 = time.time()
+            p, _, _ = paths(float(r), end=target)
+            f = std(p, end=target)
+            st = stats(f, target)
+            if (
+                np.any(~np.isfinite(st['c']))
+                or np.any(~np.isfinite(st['t']))
+                or np.any(st['c'] <= 0)
+            ):
+                raise RuntimeError(
+                    f'Non-physical/non-finite FaIR endpoint for target={target}, rate={r}: '
+                    f'CO2 range={np.nanmin(st["c"])}..{np.nanmax(st["c"])}'
+                )
+            cache[k] = st
+            print(
+                'INVERSE_EVAL', 'target', target, 'rate', r,
+                'co2_p50', round(float(st['cq'][1]), 6),
+                'baseline_delta_p50', round(float(st['bq'][1]), 6),
+                'sec', round(time.time() - t0, 1),
+                flush=True,
+            )
+        return cache[k]
 
+    def metric(r, kind):
+        st = ev(r)
+        if kind == 'absolute_280':
+            return float(np.median(st['c']) - 280)
+        return float(np.median(st['c'] - base))
 
-rows, members = [], []
-for y in targets:
+    def solve(kind):
+        lo = 0.0
+        flo = metric(lo, kind)
+        if flo <= 0:
+            return 0.0, 'already_met', 0.0, 0.0
+        hi = 1.0
+        fhi = metric(hi, kind)
+        while fhi > 0 and hi < 512:
+            lo, flo = hi, fhi
+            hi *= 2
+            fhi = metric(hi, kind)
+        if fhi > 0:
+            return None, 'not_bracketed', lo, hi
+        # 8 bisections after bracketing are enough for <0.1 GtCO2/yr resolution
+        # in the widest observed bracket and materially reduce hosted-runner time.
+        for _ in range(8):
+            mid = (lo + hi) / 2
+            fm = metric(mid, kind)
+            if fm > 0:
+                lo, flo = mid, fm
+            else:
+                hi, fhi = mid, fm
+        return hi, 'solved', lo, hi
+
+    rows, members = [], []
     for kind in ['absolute_280', 'member_relative_baseline']:
-        r, status, lo, hi = solve(y, kind)
+        r, status, lo, hi = solve(kind)
         row = {
-            'target_year': y,
+            'target_year': target,
             'criterion': kind,
             'status': status,
             'rate': r,
@@ -415,8 +437,8 @@ for y in targets:
             'high': hi,
         }
         if r is not None:
-            s = ev(r, y)
-            n = y - 2184
+            s = ev(r)
+            n = target - 2184
             row.update(
                 extra_cdr_rate_gtco2_per_year=r,
                 cumulative_extra_cdr_gtco2=r * n,
@@ -434,67 +456,58 @@ for y in targets:
             )
             for cid, c, t, b in zip(ids, s['c'], s['t'], base):
                 members.append([
-                    y, kind, r, cid, b, c, c - b, t, c <= 280, c <= b
+                    target, kind, r, cid, b, c, c - b, t, c <= 280, c <= b
                 ])
         rows.append(row)
-        # Checkpoint after every criterion. Normal Python failures later in the
-        # search will still leave the completed inverse results available for
-        # the workflow's always-upload artifact step.
-        pd.DataFrame(rows).to_csv(OUT / 'fair_inverse_solve_summary.csv', index=False)
-        pd.DataFrame(
-            members,
-            columns=[
-                'target_year', 'criterion', 'extra_rate', 'config', 'baseline_co2',
-                'co2', 'co2_minus_baseline', 'temperature', 'le_280', 'le_own_baseline'
-            ],
-        ).to_csv(OUT / 'fair_inverse_solve_members.csv', index=False)
         print(
-            'INVERSE_SOLUTION', y, kind, status,
+            'INVERSE_SOLUTION', target, kind, status,
             'extra_rate', r, 'bracket', lo, hi,
             flush=True,
         )
 
-# Final checkpoint (same files, now complete).
-pd.DataFrame(rows).to_csv(OUT / 'fair_inverse_solve_summary.csv', index=False)
-pd.DataFrame(
-    members,
-    columns=[
-        'target_year', 'criterion', 'extra_rate', 'config', 'baseline_co2',
-        'co2', 'co2_minus_baseline', 'temperature', 'le_280', 'le_own_baseline'
-    ],
-).to_csv(OUT / 'fair_inverse_solve_members.csv', index=False)
+    summary_path = OUT / f'fair_inverse_{target}_summary.csv'
+    members_path = OUT / f'fair_inverse_{target}_members.csv'
+    json_path = OUT / f'fair_inverse_{target}_summary.json'
+    pd.DataFrame(rows).to_csv(summary_path, index=False)
+    pd.DataFrame(
+        members,
+        columns=[
+            'target_year', 'criterion', 'extra_rate', 'config', 'baseline_co2',
+            'co2', 'co2_minus_baseline', 'temperature', 'le_280', 'le_own_baseline'
+        ],
+    ).to_csv(members_path, index=False)
+    out_summary = {
+        'model': 'FaIR 2.2.4',
+        'calibration': 'fair-calibrate 1.4.1',
+        'configs': 841,
+        'target_year': target,
+        'canonical_cdr_gtco2': CAN_CDR,
+        'peak_cdr_gtco2_per_year': PEAK,
+        'inverse_control': (
+            'constant additional CDR from 2184 through target; target-bounded FaIR run; '
+            'absolute-280 and member-relative-baseline criteria'
+        ),
+        'bisection_rounds_after_bracketing': 8,
+        'inverse': rows,
+    }
+    json_path.write_text(json.dumps(out_summary, indent=2))
+    print('INVERSE_TARGET_COMPLETE', target, flush=True)
 
-sel = a[a.timebound_year.isin([2040., 2100., 2156., 2184., 2200., 2300., 2400.])]
-sel.to_csv(OUT / 'fair_paired_attribution_selected.csv', index=False)
 
-summary = {
-    'model': 'FaIR 2.2.4',
-    'calibration': 'fair-calibrate 1.4.1',
-    'configs': 841,
-    'canonical_cdr_gtco2': CAN_CDR,
-    'peak_cdr_gtco2_per_year': PEAK,
-    'gtco2_per_ppm': conv,
-    'common_state_audit': audit,
-    'attribution': 'member-wise paired removal-off minus removal-on, then quantiles',
-    'neutral_nonco2_definition': (
-        'All standard inputs are preserved through 2026. From 2027 onward, '
-        'non-CO2 emissions-driven species are set to calibrated baseline_emissions, '
-        'forcing-driven species to zero forcing, concentration-driven species to '
-        'calibrated baseline_concentration, and calculated species remain calculated. '
-        'Official FaIR species input modes are not altered.'
-    ),
-    'inverse_control': (
-        'constant additional CDR from 2184 through each target year; target-bounded FaIR runs; absolute-280 and member-relative-baseline criteria'
-    ),
-    'inverse': rows,
-    'hector_status': (
-        'SEPARATE_GITHUB_ACTION_JOB: see Hector paired science artifact for the '
-        'same carbon pathway decomposition.'
-    ),
-}
-(OUT / 'fair_science_experiment_summary.json').write_text(json.dumps(summary, indent=2))
-with (OUT / 'FAIR_RUN_REPORT.txt').open('w') as h:
-    h.write('FaIR 2.2.4 science experiments\n')
-    h.write(json.dumps(summary, indent=2))
-    h.write('\n')
-print(json.dumps(summary, indent=2), flush=True)
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', choices=['paired', 'inverse'], required=True)
+    parser.add_argument('--target', type=int, choices=[2200, 2300, 2400])
+    args = parser.parse_args()
+    if args.mode == 'paired':
+        if args.target is not None:
+            parser.error('--target is only valid with --mode inverse')
+        run_paired()
+    else:
+        if args.target is None:
+            parser.error('--target is required with --mode inverse')
+        run_inverse(args.target)
+
+
+if __name__ == '__main__':
+    main()
