@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# RUN4_FIX_ID: V59.1-2026-09-08-preserve-official-FaIR-input-modes
+# RUN7_FIX_ID: V59.1-2026-09-08-target-bounded-inverse-solve
 from pathlib import Path
 import os
 import json, math, time
@@ -276,6 +276,20 @@ np.savez_compressed(
     temp_off=temp(foff),
 )
 
+# Print the key paired results immediately so they survive in the Actions log
+# even if a later inverse-search run is interrupted by runner infrastructure.
+for yy in [2156, 2184, 2200, 2300, 2400]:
+    rr = a.iloc[int(np.argmin(np.abs(a.timebound_year.to_numpy(float) - yy)))]
+    print(
+        'PAIRED_STANDARD', yy,
+        'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
+        'fraction_p05_p50_p95',
+        round(float(rr.fraction_p05), 6),
+        round(float(rr.fraction_p50), 6),
+        round(float(rr.fraction_p95), 6),
+        flush=True,
+    )
+
 print('paired preindustrial-background future non-CO2', flush=True)
 fzon = neutral(on)
 fzoff = neutral(off)
@@ -287,6 +301,18 @@ audit = {
 assert audit['co2_maxabs'] < 1e-6 and audit['temp_maxabs'] < 1e-6, audit
 az = attr(fzon, fzoff, cdr, 'preindustrial-background-future-nonco2')
 az.to_csv(OUT / 'fair_paired_attribution_neutral_nonco2.csv', index=False)
+print('COMMON_STATE_AUDIT', json.dumps(audit, sort_keys=True), flush=True)
+for yy in [2156, 2184, 2200, 2300, 2400]:
+    rr = az.iloc[int(np.argmin(np.abs(az.timebound_year.to_numpy(float) - yy)))]
+    print(
+        'PAIRED_NEUTRAL', yy,
+        'delta_p50_ppm', round(float(rr.delta_co2_p50_ppm), 6),
+        'fraction_p05_p50_p95',
+        round(float(rr.fraction_p05), 6),
+        round(float(rr.fraction_p50), 6),
+        round(float(rr.fraction_p95), 6),
+        flush=True,
+    )
 
 bg = []
 for y in [2026, 2040, 2100, 2156, 2184, 2200, 2300, 2400]:
@@ -306,25 +332,49 @@ pd.DataFrame(
 
 print('inverse solve', flush=True)
 targets = [2200, 2300, 2400]
+# Cache by (target year, rate). Each inverse experiment is intentionally run
+# only through its target year. The previous implementation ran a 2200 test
+# all the way to 2400; high rates that were physically relevant at 2200 then
+# kept removing carbon for another 200 years and drove some ensemble members
+# to non-positive CO2, producing invalid log/sqrt warnings and wasting compute.
 cache = {}
+for _y in targets:
+    cache[(_y, 0.0)] = stats(fon, _y)
 
 
-def ev(r):
-    k = round(float(r), 10)
+def ev(r, y):
+    y = int(y)
+    k = (y, round(float(r), 10))
     if k not in cache:
         t0 = time.time()
-        p, _, _ = paths(float(r))
-        f = std(p)
-        cache[k] = {y: stats(f, y) for y in targets}
-        print('rate', r, 'sec', round(time.time() - t0, 1), flush=True)
+        p, _, _ = paths(float(r), end=y)
+        f = std(p, end=y)
+        st = stats(f, y)
+        if (
+            np.any(~np.isfinite(st['c']))
+            or np.any(~np.isfinite(st['t']))
+            or np.any(st['c'] <= 0)
+        ):
+            raise RuntimeError(
+                f'Non-physical/non-finite FaIR endpoint for target={y}, rate={r}: '
+                f'CO2 range={np.nanmin(st["c"])}..{np.nanmax(st["c"])}'
+            )
+        cache[k] = st
+        print(
+            'INVERSE_EVAL', 'target', y, 'rate', r,
+            'co2_p50', round(float(st['cq'][1]), 6),
+            'baseline_delta_p50', round(float(st['bq'][1]), 6),
+            'sec', round(time.time() - t0, 1),
+            flush=True,
+        )
     return cache[k]
 
 
 def metric(r, y, kind):
-    s = ev(r)[y]
+    st = ev(r, y)
     if kind == 'absolute_280':
-        return float(np.median(s['c']) - 280)
-    return float(np.median(s['c'] - base))
+        return float(np.median(st['c']) - 280)
+    return float(np.median(st['c'] - base))
 
 
 def solve(y, kind):
@@ -335,16 +385,20 @@ def solve(y, kind):
     hi = 1.0
     fhi = metric(hi, y, kind)
     while fhi > 0 and hi < 512:
+        lo, flo = hi, fhi
         hi *= 2
         fhi = metric(hi, y, kind)
     if fhi > 0:
         return None, 'not_bracketed', lo, hi
-    for _ in range(14):
+    # Ten bisections retain high numerical precision while materially reducing
+    # the number of 841-member FaIR evaluations versus the former 14 rounds.
+    for _ in range(10):
         mid = (lo + hi) / 2
-        if metric(mid, y, kind) > 0:
-            lo = mid
+        fm = metric(mid, y, kind)
+        if fm > 0:
+            lo, flo = mid, fm
         else:
-            hi = mid
+            hi, fhi = mid, fm
     return hi, 'solved', lo, hi
 
 
@@ -361,7 +415,7 @@ for y in targets:
             'high': hi,
         }
         if r is not None:
-            s = ev(r)[y]
+            s = ev(r, y)
             n = y - 2184
             row.update(
                 extra_cdr_rate_gtco2_per_year=r,
@@ -383,7 +437,24 @@ for y in targets:
                     y, kind, r, cid, b, c, c - b, t, c <= 280, c <= b
                 ])
         rows.append(row)
+        # Checkpoint after every criterion. Normal Python failures later in the
+        # search will still leave the completed inverse results available for
+        # the workflow's always-upload artifact step.
+        pd.DataFrame(rows).to_csv(OUT / 'fair_inverse_solve_summary.csv', index=False)
+        pd.DataFrame(
+            members,
+            columns=[
+                'target_year', 'criterion', 'extra_rate', 'config', 'baseline_co2',
+                'co2', 'co2_minus_baseline', 'temperature', 'le_280', 'le_own_baseline'
+            ],
+        ).to_csv(OUT / 'fair_inverse_solve_members.csv', index=False)
+        print(
+            'INVERSE_SOLUTION', y, kind, status,
+            'extra_rate', r, 'bracket', lo, hi,
+            flush=True,
+        )
 
+# Final checkpoint (same files, now complete).
 pd.DataFrame(rows).to_csv(OUT / 'fair_inverse_solve_summary.csv', index=False)
 pd.DataFrame(
     members,
@@ -413,8 +484,7 @@ summary = {
         'Official FaIR species input modes are not altered.'
     ),
     'inverse_control': (
-        'constant additional CDR from 2184; absolute-280 and '
-        'member-relative-baseline criteria'
+        'constant additional CDR from 2184 through each target year; target-bounded FaIR runs; absolute-280 and member-relative-baseline criteria'
     ),
     'inverse': rows,
     'hector_status': (
