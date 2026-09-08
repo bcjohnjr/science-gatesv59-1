@@ -1,0 +1,129 @@
+name: V59.1 scientific gates — FaIR + Hector
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_results:
+        description: "Commit verified generated outputs back to this branch"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUNBUFFERED: "1"
+  FAIR_SOURCE_DIR: /tmp/FAIR-v2.2.4
+
+jobs:
+  fair-science:
+    name: FaIR paired attribution + neutral non-CO2 + inverse solve
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install pinned FaIR workload
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Clone official FaIR 2.2.4 source and calibration files
+        run: |
+          rm -rf "$FAIR_SOURCE_DIR"
+          git clone --depth 1 --branch v2.2.4 https://github.com/OMS-NetZero/FAIR.git "$FAIR_SOURCE_DIR"
+      - name: Verify flat source inputs
+        run: |
+          test -f external_validation_net_co2_trajectory.csv
+          test -f "$FAIR_SOURCE_DIR/examples/data/calibrated_constrained_ensemble/calibrated_constrained_parameters_calibration1.4.1.csv"
+          python -m py_compile run_fair_science_experiments.py verify_fair_outputs.py
+      - name: Run scientific FaIR experiments
+        run: python run_fair_science_experiments.py
+      - name: Verify FaIR scientific outputs
+        run: python verify_fair_outputs.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fair-science-gates
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            fair_paired_attribution.csv
+            fair_paired_attribution_neutral_nonco2.csv
+            fair_paired_members.npz
+            fair_neutral_nonco2.csv
+            fair_inverse_solve_summary.csv
+            fair_inverse_solve_members.csv
+            fair_paired_attribution_selected.csv
+            fair_science_experiment_summary.json
+            FAIR_RUN_REPORT.txt
+      - name: Optionally commit verified FaIR outputs
+        if: ${{ inputs.commit_results }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fair_* FAIR_RUN_REPORT.txt
+          if git diff --cached --quiet; then
+            echo "No FaIR output changes to commit."
+          else
+            git commit -m "Add V59.1 FaIR science-gate outputs"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi
+
+  hector-science:
+    name: Hector 3.5.0 paired carbon-cycle rerun
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "4.5.1"
+          use-public-rspm: true
+      - name: System libraries for Hector
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libboost-dev libboost-filesystem-dev libboost-system-dev
+      - name: Install Hector 3.5.0
+        shell: Rscript {0}
+        run: |
+          install.packages(c("remotes", "jsonlite"))
+          remotes::install_github("JGCRI/hector@v3.5.0", upgrade="never", dependencies=TRUE)
+      - name: Verify flat Hector input
+        run: test -f external_validation_net_co2_trajectory.csv
+      - name: Run Hector paired experiment
+        run: Rscript run_hector_paired.R
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify Hector outputs
+        run: |
+          python -m pip install pandas
+          python verify_hector_outputs.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hector-science-gates
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            hector_paired_attribution.csv
+            hector_removal_on_long.csv
+            hector_removal_off_long.csv
+            hector_science_summary.json
+      - name: Optionally commit verified Hector outputs
+        if: ${{ inputs.commit_results }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add hector_*
+          if git diff --cached --quiet; then
+            echo "No Hector output changes to commit."
+          else
+            git commit -m "Add V59.1 Hector science-gate outputs"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin HEAD:"${GITHUB_REF_NAME}"
+          fi

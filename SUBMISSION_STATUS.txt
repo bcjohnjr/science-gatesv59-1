@@ -1,0 +1,16 @@
+NOT SUBMISSION READY — SCOPE FROZEN AT V59.1
+
+V59.1 is a corrective maintenance release. No new planetary subsystem is added.
+
+The remaining critical path is:
+1. official FaIR common-state restart / historical-splice reconciliation;
+2. official FaIR zero-background-non-CO2 attribution run;
+3. official inverse FaIR removal-schedule solve;
+4. OSCAR run, or an explicit justified revision of the previously declared OSCAR gate.
+
+Paper-facing scope is frozen to:
+- externally benchmarked carbon-sink response / reversal;
+- the inverse solve when available;
+- sea-level persistence through the archived FaIR horizon as a consequence.
+
+Coral, pH, seaweed, fisheries, grid, human-welfare and monetary architecture remain preserved in the package but should be supplementary material or separate papers rather than additional main-text scope.

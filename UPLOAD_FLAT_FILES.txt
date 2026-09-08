@@ -1,0 +1,33 @@
+FLAT GITHUB UPLOAD — PLANETARY RESTORATION MODEL V59.1 SCIENCE WORKLOAD
+
+There are NO upload subdirectories in this ZIP.
+
+UPLOAD THESE FILES TO THE REPOSITORY ROOT:
+  run_fair_science_experiments.py
+  verify_fair_outputs.py
+  run_hector_paired.R
+  verify_hector_outputs.py
+  requirements.txt
+  HECTOR_COMMON_BACKGROUND_NOTE.md
+  external_validation_net_co2_trajectory.csv
+  SCIENCE_WORKLOAD.md
+
+ONE GITHUB-MANDATED EXCEPTION:
+  science-gates.yml must live in .github/workflows/ for GitHub Actions to see it.
+
+Your repository already has .github/workflows. In GitHub:
+  1. Open .github
+  2. Open workflows
+  3. Click Add file > Upload files
+  4. Upload ONLY science-gates.yml there
+
+Do not upload any folder from this ZIP. There are no folders in it.
+
+All Python and R paths have been changed for the flat repository layout.
+The input CSV is read directly from repository root.
+Generated experiment result files are also written directly to repository root during the Action run.
+The FaIR source tree is cloned by GitHub Actions into /tmp, not into your repository.
+
+First run:
+  Actions > V59.1 scientific gates — FaIR + Hector > Run workflow
+  commit_results = false

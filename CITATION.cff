@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this model package, cite the authors and Version 59.1 package."
+title: "Planetary Restoration Model Version 59.1 — Scope-Freeze Maintenance Release"
+version: "59.1"
+date-released: "2026-09-07"
+type: software
+authors:
+  - family-names: "Bily"
+    given-names: "Jonathan Karl"
+  - family-names: "Pahl"
+    given-names: "Christoph"
+abstract: "Scope-frozen planetary-restoration model package preserving the V59 integrated architecture while narrowing paper-facing claims to externally benchmarked carbon-sink response, inverse-model validation needs, and sea-level persistence through the archived FaIR horizon."

@@ -1,0 +1,25 @@
+V59.1 VALIDATION STATUS
+
+MAINTENANCE TEST SUITE: PASS
+SCOPE: FROZEN
+NEW PLANETARY MODULES: NONE
+
+Closed in V59.1:
+- stale JSON submission status;
+- manifest / __pycache__ reproducibility defect;
+- historical root duplication;
+- early >1 response-ratio caption;
+- aggregate archived percentile-curve endpoint envelope;
+- OAE peak-increment reporting;
+- fixed-T/S pH publication-precision overclaim;
+- paper-facing removal of post-2400 sea-level dates;
+- explicit AR6 sea-level calibration/under-dispersion check;
+- novelty benchmark;
+- manuscript scope freeze.
+
+Still open:
+- configuration-level FaIR response-fraction uncertainty;
+- common-state / splice-correct FaIR restart;
+- zero-background-non-CO2 FaIR;
+- inverse FaIR target solve;
+- OSCAR or justified revision of that gate.
