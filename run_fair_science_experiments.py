@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# RUN4_FIX_ID: V59.1-2026-09-08-preserve-official-FaIR-input-modes
 from pathlib import Path
 import os
 import json, math, time
